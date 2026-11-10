@@ -48,7 +48,7 @@ test('V3.7.0 exposes Phonon sample playback, voice selection and cache deletion'
   const html = await readFile(new URL('../index.html', import.meta.url), 'utf8');
   const app = await readFile(new URL('../js/app.js', import.meta.url), 'utf8');
   const manager = await readFile(new URL('../js/voice-manager.js', import.meta.url), 'utf8');
-  for (const id of ['nele','anton','zoey','easton']) assert.match(html, new RegExp('voice-samples/' + id + '\\\\.ogg'));
+  for (const id of ['nele','anton','zoey','easton']) assert.ok(html.includes('voice-samples/' + id + '.ogg'));
   assert.match(html, /id="downloadVoiceModels"/);
   assert.match(html, /id="deleteVoiceModels"/);
   assert.match(app, /downloadSelectedVoices/);
