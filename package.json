@@ -1,0 +1,10 @@
+{
+  "name": "deutsch-meister",
+  "private": true,
+  "version": "3.7.0-prep",
+  "description": "Personal German vocabulary learning app \u2014 Phonon migration preparation",
+  "devDependencies": {
+    "phonon-tts": "0.4.2"
+  },
+  "type": "module"
+}
