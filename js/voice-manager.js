@@ -110,6 +110,16 @@ async function loadTts(voiceId, onProgress = () => {}) {
   return tts;
 }
 
+async function waitForVoiceCache(voiceId, timeoutMs = 30000) {
+  const deadline = Date.now() + timeoutMs;
+  let status = await getVoiceStorageStatus();
+  while (!status.voices[voiceId] && Date.now() < deadline) {
+    await new Promise(resolve => setTimeout(resolve, 200));
+    status = await getVoiceStorageStatus();
+  }
+  return status;
+}
+
 export async function downloadNeuralVoice(voiceId, onProgress = () => {}) {
   const voice = assertVoice(voiceId);
   const before = await getVoiceStorageStatus();
@@ -130,7 +140,9 @@ export async function downloadNeuralVoice(voiceId, onProgress = () => {}) {
     onProgress
   });
   tts.dispose();
-  const after = await getVoiceStorageStatus();
+  // The package persists worker-fetched bytes asynchronously on the page thread.
+  // Wait for its Cache API writes before reporting the selected voice as installed.
+  const after = await waitForVoiceCache(voiceId);
   if (!after.voices[voiceId]) {
     throw new Error('Phonon finished loading, but the browser did not retain the model and voice in its cache. Check available device storage.');
   }
