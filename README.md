@@ -25,6 +25,10 @@ This copies the exact pinned `phonon-tts@0.4.2` package, including its WebAssemb
 
 The Phonon 40M multilingual checkpoint and voice catalogue assets are already stored in `models/phonon` and `assets/voice-samples`. The model is CC BY-NC 4.0 and must not be used commercially without appropriate permission. See `PHONON-LICENSE-NOTICE.md` and `PHONON-RUNTIME-NOTICE.md`.
 
+## Build automation
+
+The migration branch CI vendors the pinned runtime, runs syntax and regression checks, and commits the generated `vendor/phonon-tts` files to this branch after successful checks. The `main` branch is not modified.
+
 ## Existing learning features
 
 The two learning methods retain independent schedules for every word. Leitner uses five boxes (1, 2, 4, 7 and 14 days); Forgot returns a word to Box 1 and Remembered advances one box. Classic SM-2 uses Again=1, Hard=3, Good=4, Easy=5; successful intervals begin at 1 day and 6 days, then use the updated ease factor. Due dates use local calendar dates.
