@@ -10,7 +10,6 @@ const CORE = [
   './assets/voice-samples/nele.ogg', './assets/voice-samples/anton.ogg',
   './assets/voice-samples/zoey.ogg', './assets/voice-samples/easton.ogg',
 ];
-];
 const OPTIONAL_RUNTIME = [
   './vendor/phonon-tts/index.js', './vendor/phonon-tts/worker.js',
   './vendor/phonon-tts/fetch.js', './vendor/phonon-tts/hub.js',
