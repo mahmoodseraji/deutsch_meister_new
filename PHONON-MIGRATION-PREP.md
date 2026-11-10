@@ -1,38 +1,36 @@
-# Deutsch Meister 3.7.0 — Phonon migration preparation
+# Deutsch Meister 3.7.0 — Phonon migration handover
 
-This preparation branch is based on the complete V3.6.7 source archive. No vocabulary, IndexedDB, review history, Leitner, SM-2, CSV, or progress code has been modified in this preparation step.
+The application source has now been migrated on branch `phonon-migration-v3.7.0`. Main remains unchanged.
 
-## Confirmed design
+## Implemented in the branch
 
-- One shared Phonon 40M multilingual model for German and English.
-- Four independent voice choices: Nele, Anton, Zoey, Easton.
-- Four small static OGG audition recordings; preview does not require downloading the model.
-- System speech remains the fallback.
-- Download only after the learner chooses an on-device voice; shared model weights are downloaded once, while selected voice embeddings are small separate assets.
-- Downloaded model and voice data must be removable without touching vocabulary or learning progress.
-- Offline operation is required after successful model installation.
+- Piper coordinator and worker removed; the app now uses the official `phonon-tts` 0.4.2 browser API.
+- Four sample players and separate German/English selectors: Nele, Anton, Zoey, Easton.
+- User-initiated downloads; shared q8 multilingual model plus only the selected voice embedding.
+- System speech remains the default and fallback.
+- Cache deletion removes Phonon model and voice entries without touching IndexedDB vocabulary or review progress.
+- Service-worker cache version bumped to 3.7.0; sample recordings and vendored runtime paths are listed for offline caching.
+- Existing scheduler, vocabulary, CSV/JSON and IndexedDB code has not intentionally been changed.
 
-## Model access and asset preparation
+## Required local build step
 
-The 40M multilingual checkpoint is gated on Hugging Face. Before downloading, sign in and accept the model terms at:
-
-https://huggingface.co/gradium/phonon-40m-multilingual
-
-Create a Hugging Face read token and run the asset preparation script from the project root:
+The npm runtime must be copied into the repository before deployment. From the repository root, with Node.js 20+:
 
 ```powershell
-$env:HF_TOKEN="hf_your_read_token"
-node scripts/download-phonon-assets.mjs
+npm install
+npm run vendor:phonon
+npm test
 ```
 
-The script downloads the model files, the four speaker embeddings, and the four static audition samples into their intended project folders. It does not store the token.
+Commit the generated `vendor/phonon-tts` directory. It includes the runtime JavaScript, worker, WebAssembly files and package licence notices. The workflow added to this branch also performs syntax checks, tests and runtime asset checks.
 
-## Important runtime integration gate
+The 74.6 MB model and four voice embeddings plus preview OGGs are already in the repository. The model is CC BY-NC 4.0; keep the attribution and non-commercial notice.
 
-The official browser package is `phonon-tts` 0.4.2. The browser guide documents `PhononTTS.load({ lang, model })`, `synthWav(text)`, `stream(text)`, and `dispose()`. The 40M gated model cannot be fetched directly from Hugging Face by the browser; it must be served by the app itself. The runtime package must also be vendored/bundled locally before claiming first-install offline capability.
+## Not yet verified
 
-This prep archive intentionally does not pretend the runtime is already migrated. The next implementation step is to vendor and test the exact npm runtime build, wire its model specification and voice embeddings, implement safe model-cache deletion, and then replace the Piper worker. Do not deploy this preparation archive as a completed 3.7.0 release.
+- The npm runtime has not yet been generated/committed in this branch.
+- The full automated suite and JavaScript syntax checks have not yet been run in this environment.
+- Actual Phonon synthesis has not been run in desktop Safari/Chrome or on iPhone 16 / iOS 26.
+- Offline cold start, switching voices, and cache deletion require browser/device testing.
 
-## GitHub hosting note
-
-The quantized checkpoint is approximately 74.6 MB, below GitHub's 100 MB per-file hard limit, but it substantially increases repository history. For a cleaner repository, consider GitHub Release assets or Git LFS for source storage. Git LFS pointers must not be assumed to work as ordinary GitHub Pages model URLs; verify the actual served file URL before deployment.
+Do not merge or publish this as a completed release until the vendoring step and automated checks pass, then perform real-device playback tests. No vocabulary or learning progress should be lost by this pronunciation-only change.
