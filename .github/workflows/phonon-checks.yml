@@ -1,0 +1,46 @@
+name: Phonon migration checks
+
+on:
+  push:
+    branches:
+      - phonon-migration-v3.7.0
+  pull_request:
+    branches:
+      - main
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  checks:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out source
+        uses: actions/checkout@v4
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+      - name: Install pinned runtime
+        run: npm install --no-audit --no-fund
+      - name: Vendor local runtime
+        run: npm run vendor:phonon
+      - name: Check JavaScript syntax
+        run: |
+          node --check js/app.js
+          node --check js/voice-manager.js
+          node --check sw.js
+          node --check scripts/vendor-phonon.mjs
+      - name: Run automated tests
+        run: npm test
+      - name: Confirm runtime assets exist
+        run: |
+          test -s vendor/phonon-tts/index.js
+          test -s vendor/phonon-tts/worker.js
+          test -s vendor/phonon-tts/wasm/phonon_tts_bg.wasm
+          test -s vendor/phonon-tts/wasm/phonon_tts_simd_bg.wasm
+          test -s vendor/phonon-tts/wasm-threads/phonon_tts_bg.wasm
+          test -s vendor/phonon-tts/LICENSE-MIT
+          test -s vendor/phonon-tts/LICENSE-APACHE
