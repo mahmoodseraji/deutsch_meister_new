@@ -25,15 +25,7 @@ const OPTIONAL_RUNTIME = [
   './vendor/phonon-tts/LICENSE-MIT', './vendor/phonon-tts/LICENSE-APACHE',
   './vendor/phonon-tts/THIRD_PARTY_LICENSES.md'
 ];
-const PHONON_MODEL_FILES = [
-  './models/phonon/model.q8.gguf',
-  './models/phonon/tokenizer.json',
-  './models/phonon/config.json',
-  './models/phonon/voices/nele.safetensors',
-  './models/phonon/voices/anton.safetensors',
-  './models/phonon/voices/zoey.safetensors',
-  './models/phonon/voices/easton.safetensors'
-];
+
 
 self.addEventListener('install', event => {
   event.waitUntil((async () => {
