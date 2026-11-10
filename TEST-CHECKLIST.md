@@ -16,12 +16,12 @@
 
 ## Required build and CI checks
 
-- [ ] Run `npm install`.
-- [ ] Run `npm run vendor:phonon`; verify `vendor/phonon-tts` contains worker, JS, WASM and licence files.
-- [ ] Run `node --check js/app.js`, `node --check js/voice-manager.js`, `node --check sw.js`.
-- [ ] Run `npm test` and confirm all tests pass.
-- [ ] Confirm GitHub Actions workflow is green.
-- [ ] Commit generated `vendor/phonon-tts` directory before deployment.
+- [x] Run `npm install` in GitHub Actions.
+- [x] Run `npm run vendor:phonon`; verify `vendor/phonon-tts` contains worker, JS, WASM and licence files.
+- [x] Run `node --check js/app.js`, `node --check js/voice-manager.js`, `node --check sw.js`.
+- [x] Run `npm test` and confirm all tests pass.
+- [x] Confirm GitHub Actions workflow is green.
+- [x] Commit generated `vendor/phonon-tts` directory to the migration branch.
 
 ## Manual browser/device validation
 
