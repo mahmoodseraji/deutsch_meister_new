@@ -317,3 +317,13 @@ body.reviewing-session .study-card-face { position:absolute; inset:0; width:100%
 .voice-sample small{color:var(--muted);font-size:.78rem}
 .voice-sample audio{display:block;width:100%;height:34px}
 @media(max-width:420px){.voice-sample-grid{grid-template-columns:1fr}}
+
+
+
+/* Fix: hide the front-side speaker when the card is flipped */
+body.reviewing-session #studyCard.is-flipped .study-card-front .sound-button {
+  visibility: hidden !important;
+  opacity: 0 !important;
+  pointer-events: none !important;
+}
+
