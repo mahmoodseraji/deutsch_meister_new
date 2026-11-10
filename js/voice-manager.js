@@ -1,138 +1,140 @@
-// Main-thread voice coordinator. Heavy model work runs in voice-worker.js.
-const MODEL_IDS = Object.freeze({ jarvis: 'de_DE-jarvis-medium', amy: 'en_US-amy-medium' });
-let requestSequence = 0;
-let speechWorker = null;
-let speechLanguage = null;
+// Phonon 40M multilingual voice manager.
+// The runtime is vendored locally at ../vendor/phonon-tts; model bytes and selected
+// voice embeddings are cached by phonon-tts in the dedicated Cache API cache.
+const CACHE_NAME = 'phonon-tts-v1';
+const MODEL_ROOT = new URL('../models/phonon/', import.meta.url);
+const MODEL_URLS = Object.freeze({
+  weights: new URL('model.q8.gguf', MODEL_ROOT).href,
+  tokenizer: new URL('tokenizer.json', MODEL_ROOT).href,
+  config: new URL('config.json', MODEL_ROOT).href
+});
+
+export const VOICE_CATALOG = Object.freeze({
+  nele:   { name: 'Nele',   language: 'de', sample: '../assets/voice-samples/nele.ogg', label: 'Nele · German · female' },
+  anton:  { name: 'Anton',  language: 'de', sample: '../assets/voice-samples/anton.ogg', label: 'Anton · German · male' },
+  zoey:   { name: 'Zoey',   language: 'en', sample: '../assets/voice-samples/zoey.ogg', label: 'Zoey · English · female' },
+  easton: { name: 'Easton', language: 'en', sample: '../assets/voice-samples/easton.ogg', label: 'Easton · English · male' }
+});
+
+const VOICE_URLS = Object.freeze({
+  Nele: new URL('voices/nele.safetensors', MODEL_ROOT).href,
+  Anton: new URL('voices/anton.safetensors', MODEL_ROOT).href,
+  Zoey: new URL('voices/zoey.safetensors', MODEL_ROOT).href,
+  Easton: new URL('voices/easton.safetensors', MODEL_ROOT).href
+});
+
+function modelSpec(defaultVoice) {
+  return {
+    weights: { q8: MODEL_URLS.weights },
+    tokenizer: MODEL_URLS.tokenizer,
+    config: MODEL_URLS.config,
+    voices: VOICE_URLS,
+    defaultVoice
+  };
+}
+
+let phononModulePromise = null;
+let activeTts = null;
+let activeKey = null;
 let audioContext = null;
 let activeSource = null;
 let activeAudio = null;
 let activeAudioCancel = null;
 let speechSequence = 0;
 
-class VoiceWorkerClient {
-  constructor() {
-    this.worker = new Worker(new URL('./voice-worker.js', import.meta.url));
-    this.pending = new Map();
-    this.worker.addEventListener('message', event => this.onMessage(event.data));
-    this.worker.addEventListener('error', event => this.failAll(new Error(event.message || 'Neural voice worker failed.')));
-    this.worker.addEventListener('messageerror', () => this.failAll(new Error('Could not read the neural voice worker response.')));
-  }
-  onMessage(message) {
-    const item = this.pending.get(message.requestId);
-    if (!item) return;
-    if (message.type === 'progress') { item.onProgress?.(message.progress || {}); return; }
-    if (message.type === 'stage') { item.onProgress?.({ stage: message.stage }); return; }
-    if (message.type === 'log') return;
-    if (message.type !== 'error' && message.type !== 'result' && message.type !== 'audio') return;
-    this.pending.delete(message.requestId);
-    if (item.timer) clearTimeout(item.timer);
-    if (message.type === 'error') item.reject(new Error(message.error || 'Neural voice operation failed.'));
-    else item.resolve(message);
-  }
-  request(action, payload = {}, onProgress) {
-    const requestId = ++requestSequence;
-    return new Promise((resolve, reject) => {
-      const timeoutMs = action === 'speak' ? 45000 : action === 'runtime' ? 240000 : action === 'download' ? 600000 : 30000;
-      const timer = setTimeout(() => {
-        this.pending.delete(requestId);
-        reject(new Error(action === 'speak' ? 'Neural speech timed out. Switching to the system voice.' : `Voice ${action} timed out.`));
-        this.terminate();
-      }, timeoutMs);
-      this.pending.set(requestId, { resolve, reject, onProgress, timer });
-      try { this.worker.postMessage({ requestId, action, ...payload }); }
-      catch (error) { clearTimeout(timer); this.pending.delete(requestId); reject(error); }
+async function loadPhononModule() {
+  if (!phononModulePromise) {
+    phononModulePromise = import('../vendor/phonon-tts/index.js').catch(error => {
+      phononModulePromise = null;
+      throw new Error(
+        'The local Phonon runtime is not installed. Run npm install and npm run vendor:phonon, then commit vendor/phonon-tts. ' +
+        (error?.message || String(error))
+      );
     });
   }
-  failAll(error) {
-    for (const item of this.pending.values()) { if (item.timer) clearTimeout(item.timer); item.reject(error); }
-    this.pending.clear();
-  }
-  terminate() {
-    this.failAll(new Error('Neural voice worker was stopped.'));
-    this.worker.terminate();
-  }
+  return phononModulePromise;
 }
 
-function createWorker() { return new VoiceWorkerClient(); }
-
-export async function prepareVoiceModels(onProgress = () => {}, allowDownload = navigator.onLine) {
-  const client = createWorker();
-  const stored = new Set();
-  const errors = [];
-  const pending = [];
-  let runtimeError = null;
-  try {
-    const initial = await client.request('status');
-    for (const id of initial.stored || []) stored.add(id);
-    if (allowDownload && navigator.onLine) {
-      try {
-        onProgress({ voice: 'runtime', state: 'starting', loaded: 0, total: 0 });
-        await client.request('runtime', {}, progress => onProgress({ voice: 'runtime', state: 'downloading', ...progress }));
-        onProgress({ voice: 'runtime', state: 'ready', loaded: 1, total: 1 });
-      } catch (error) {
-        runtimeError = error?.message || String(error);
-        onProgress({ voice: 'runtime', state: 'error', error: runtimeError });
-        return { stored: [...stored], errors, pending, runtimeError };
-      }
-    } else if (Object.values(initial.complete || {}).some(Boolean)) {
-      // Existing models stay usable offline only if their runtime files were cached earlier.
-      try { await client.request('runtime'); }
-      catch (error) { runtimeError = error?.message || String(error); }
-    }
-    for (const voice of ['jarvis', 'amy']) {
-      const id = MODEL_IDS[voice];
-      if (initial.complete?.[voice] === true) {
-        onProgress({ voice, state: 'ready', loaded: 1, total: 1 });
-        continue;
-      }
-      if (!allowDownload || !navigator.onLine) {
-        pending.push(voice);
-        onProgress({ voice, state: 'pending' });
-        continue;
-      }
-      try {
-        onProgress({ voice, state: 'starting', loaded: 0, total: 0 });
-        const reportProgress = progress => onProgress({ voice, state: 'downloading', ...progress });
-        let result;
-        try {
-          result = await client.request('download', { voice }, reportProgress);
-        } catch (firstError) {
-          const message = String(firstError?.message || firstError);
-          const transient = /Failed to fetch|NetworkError|download failed \((?:429|5\d\d)\)/i.test(message);
-          if (!allowDownload || !navigator.onLine || !transient) throw firstError;
-          onProgress({ voice, state: 'retrying' });
-          await new Promise(resolve => setTimeout(resolve, 1200));
-          result = await client.request('download', { voice }, reportProgress);
-        }
-        for (const saved of result.stored || []) stored.add(saved);
-        if (result.complete?.[voice] !== true || !stored.has(id)) throw new Error('The model download could not be verified.');
-        onProgress({ voice, state: 'ready', loaded: 1, total: 1 });
-      } catch (error) {
-        errors.push({ voice, error: error?.message || String(error) });
-        onProgress({ voice, state: 'error', error: error?.message || String(error) });
-      }
-    }
-    return { stored: [...stored], errors, pending, runtimeError };
-  } finally {
-    client.terminate();
-  }
+async function openPhononCache() {
+  if (typeof caches === 'undefined') return null;
+  try { return await caches.open(CACHE_NAME); } catch { return null; }
 }
 
-function getSpeechWorker(language) {
-  if (speechWorker && speechLanguage !== language) {
-    speechWorker.terminate();
-    speechWorker = null;
-  }
-  if (!speechWorker) {
-    speechWorker = createWorker();
-    speechLanguage = language;
-  }
-  return speechWorker;
+async function cacheHas(cache, url) {
+  if (!cache) return false;
+  try { return !!(await cache.match(url)); } catch { return false; }
 }
 
-function stopCurrentAudio() {
-  if (activeSource) { try { activeSource.stop(); } catch { /* already ended */ } activeSource = null; }
-  if (activeAudio) { activeAudio.pause(); activeAudioCancel?.(); activeAudio = null; activeAudioCancel = null; }
+export async function getVoiceStorageStatus() {
+  const cache = await openPhononCache();
+  const modelChecks = await Promise.all(Object.values(MODEL_URLS).map(url => cacheHas(cache, url)));
+  const modelReady = modelChecks.every(Boolean);
+  const voices = {};
+  for (const [id, voice] of Object.entries(VOICE_CATALOG)) {
+    voices[id] = modelReady && await cacheHas(cache, VOICE_URLS[voice.name]);
+  }
+  return { modelReady, voices, anyDownloaded: Object.values(voices).some(Boolean) };
+}
+
+function assertVoice(voiceId, language) {
+  const voice = VOICE_CATALOG[voiceId];
+  if (!voice) throw new Error(`Unknown Phonon voice: ${voiceId}`);
+  if (language && voice.language !== language) {
+    throw new Error(`${voice.name} is not a ${language === 'de' ? 'German' : 'English'} voice.`);
+  }
+  return voice;
+}
+
+async function loadTts(voiceId, onProgress = () => {}) {
+  const voice = assertVoice(voiceId);
+  const status = await getVoiceStorageStatus();
+  if (!status.voices[voiceId]) {
+    throw new Error(`${voice.name} is not downloaded. Open Settings and download the selected voice first.`);
+  }
+  const key = `${voice.language}:${voiceId}`;
+  if (activeTts && activeKey === key) return activeTts;
+  disposeEngine();
+  const { PhononTTS } = await loadPhononModule();
+  const tts = await PhononTTS.load({
+    lang: voice.language,
+    model: modelSpec(voice.name),
+    voices: [voice.name],
+    quant: 'q8',
+    device: 'cpu',
+    threads: 1,
+    cache: true,
+    onProgress
+  });
+  activeTts = tts;
+  activeKey = key;
+  return tts;
+}
+
+export async function downloadNeuralVoice(voiceId, onProgress = () => {}) {
+  const voice = assertVoice(voiceId);
+  const before = await getVoiceStorageStatus();
+  if (before.voices[voiceId]) return before;
+  if (typeof caches === 'undefined') {
+    throw new Error('This browser does not provide persistent Cache Storage. Use HTTPS or localhost, then try again.');
+  }
+  disposeEngine();
+  const { PhononTTS } = await loadPhononModule();
+  const tts = await PhononTTS.load({
+    lang: voice.language,
+    model: modelSpec(voice.name),
+    voices: [voice.name],
+    quant: 'q8',
+    device: 'cpu',
+    threads: 1,
+    cache: true,
+    onProgress
+  });
+  tts.dispose();
+  const after = await getVoiceStorageStatus();
+  if (!after.voices[voiceId]) {
+    throw new Error('Phonon finished loading, but the browser did not retain the model and voice in its cache. Check available device storage.');
+  }
+  return after;
 }
 
 function getAudioContext() {
@@ -143,71 +145,106 @@ function getAudioContext() {
   return audioContext;
 }
 
-export async function speakNeural(voice, text, rate = 0.88, onStage = () => {}) {
-  // Resume the audio context synchronously from the user's tap, before awaiting inference.
-  const token = ++speechSequence;
-  stopCurrentAudio();
-  const context = getAudioContext();
-  const resume = context && context.state === 'suspended' ? context.resume() : Promise.resolve();
-  const language = voice === 'jarvis' ? 'de' : 'en';
-  const client = getSpeechWorker(language);
-  let result;
-  onStage('Starting neural worker');
-  try { result = await client.request('speak', { voice, text: String(text || '') }, progress => { if (progress.stage) onStage(progress.stage); }); }
-  catch (error) { if (token !== speechSequence) return; throw error; }
-  if (token !== speechSequence) return;
-  onStage('Preparing audio playback');
-  if (!context) {
-    const blob = new Blob([result.buffer], { type: 'audio/wav' });
-    const url = URL.createObjectURL(blob);
-    const audio = new Audio(url);
-    activeAudio = audio;
-    audio.playbackRate = Math.max(0.65, Math.min(1.25, Number(rate) || 0.88));
-    try {
-      const finished = new Promise((resolve, reject) => {
-        activeAudioCancel = resolve;
-        audio.addEventListener('ended', resolve, { once: true });
-        audio.addEventListener('error', () => reject(new Error('Audio playback failed.')), { once: true });
-      });
-      const playbackTimeout = new Promise((_, reject) => setTimeout(() => reject(new Error('Audio playback did not finish within 30 seconds.')), 30000));
-      await audio.play();
-      onStage('Playing neural audio');
-      await Promise.race([finished, playbackTimeout]);
-    } finally { if (activeAudio === audio) activeAudio = null; activeAudioCancel = null; URL.revokeObjectURL(url); }
-    return;
-  }
-  await resume;
-  if (context.state !== 'running') throw new Error(`iOS audio context is ${context.state}; playback could not start.`);
-  if (token !== speechSequence) return;
+function stopCurrentAudio() {
   if (activeSource) {
-    try { activeSource.stop(); } catch { /* already ended */ }
+    try { activeSource.stop(); } catch { /* already stopped */ }
     activeSource = null;
   }
-  onStage('Decoding generated audio');
-  const audioBuffer = await context.decodeAudioData(result.buffer.slice(0));
-  if (token !== speechSequence) return;
-  const source = context.createBufferSource();
-  source.buffer = audioBuffer;
-  source.playbackRate.value = Math.max(0.65, Math.min(1.25, Number(rate) || 0.88));
-  source.connect(context.destination);
-  activeSource = source;
-  onStage('Playing neural audio');
-  await Promise.race([new Promise((resolve, reject) => {
-    source.onended = () => {
-      source.buffer = null;
-      if (activeSource === source) activeSource = null;
-      resolve();
-    };
-    try { source.start(0); } catch (error) { reject(error); }
-  }), new Promise((_, reject) => setTimeout(() => reject(new Error('Neural audio playback timed out after 30 seconds.')), 30000))]);
+  if (activeAudio) {
+    activeAudio.pause();
+    activeAudioCancel?.();
+    activeAudio = null;
+    activeAudioCancel = null;
+  }
 }
 
-export async function deleteNeuralVoice(voice) {
-  if (!MODEL_IDS[voice]) throw new Error('Unknown neural voice.');
-  if (speechWorker) { speechWorker.terminate(); speechWorker = null; speechLanguage = null; }
-  const client = createWorker();
-  try { return await client.request('delete', { voice }); }
-  finally { client.terminate(); }
+function disposeEngine() {
+  if (activeTts) {
+    try { activeTts.dispose(); } catch { /* worker may already have stopped */ }
+    activeTts = null;
+    activeKey = null;
+  }
+}
+
+export async function speakNeural(voiceId, text, rate = 0.88, onStage = () => {}) {
+  const voice = assertVoice(voiceId);
+  const sourceText = String(text || '').trim();
+  if (!sourceText) throw new Error('There is no text to pronounce.');
+  if (sourceText.length > 2000) throw new Error('Please keep a pronunciation request below 2,000 characters.');
+
+  const token = ++speechSequence;
+  stopCurrentAudio();
+
+  // Start/resume audio synchronously in the original tap gesture before model inference.
+  const context = getAudioContext();
+  const resumePromise = context && context.state === 'suspended' ? context.resume() : Promise.resolve();
+
+  onStage('Loading the selected Phonon voice');
+  const tts = await loadTts(voiceId, progress => {
+    const file = progress?.file || 'voice files';
+    const amount = progress?.total ? ` · ${Math.round(progress.loaded / progress.total * 100)}%` : '';
+    onStage(`Loading ${file}${amount}`);
+  });
+  if (token !== speechSequence) return;
+  onStage('Generating speech');
+  const wav = await tts.synthWav(sourceText, { voice: voice.name });
+  if (token !== speechSequence) return;
+  onStage('Preparing audio playback');
+
+  if (context) {
+    await resumePromise;
+    if (context.state !== 'running') throw new Error(`iOS audio context is ${context.state}; playback could not start.`);
+    if (token !== speechSequence) return;
+    const audioBuffer = await context.decodeAudioData(await wav.arrayBuffer());
+    if (token !== speechSequence) return;
+    const source = context.createBufferSource();
+    source.buffer = audioBuffer;
+    source.playbackRate.value = Math.max(0.65, Math.min(1.25, Number(rate) || 0.88));
+    source.connect(context.destination);
+    activeSource = source;
+    onStage('Playing Phonon audio');
+    await new Promise((resolve, reject) => {
+      source.onended = () => {
+        source.buffer = null;
+        if (activeSource === source) activeSource = null;
+        resolve();
+      };
+      try { source.start(0); } catch (error) { reject(error); }
+    });
+    return;
+  }
+
+  // Fallback for browsers without Web Audio. The system voice remains the app-level fallback
+  // if the browser blocks this delayed audio-element playback.
+  const url = URL.createObjectURL(wav);
+  const audio = new Audio(url);
+  activeAudio = audio;
+  audio.playbackRate = Math.max(0.65, Math.min(1.25, Number(rate) || 0.88));
+  try {
+    const finished = new Promise(resolve => {
+      activeAudioCancel = resolve;
+      audio.addEventListener('ended', resolve, { once: true });
+      audio.addEventListener('error', resolve, { once: true });
+    });
+    await audio.play();
+    onStage('Playing Phonon audio');
+    await finished;
+  } finally {
+    if (activeAudio === audio) activeAudio = null;
+    activeAudioCancel = null;
+    URL.revokeObjectURL(url);
+  }
+}
+
+export async function deleteAllNeuralVoices() {
+  terminateNeuralWorker();
+  const cache = await openPhononCache();
+  if (!cache) return false;
+  let removed = false;
+  for (const url of [...Object.values(VOICE_URLS), ...Object.values(MODEL_URLS)]) {
+    removed = (await cache.delete(url)) || removed;
+  }
+  return removed;
 }
 
 export function stopNeuralSpeech() {
@@ -217,11 +254,13 @@ export function stopNeuralSpeech() {
 
 export function terminateNeuralWorker() {
   stopNeuralSpeech();
-  speechWorker?.terminate();
-  speechWorker = null;
-  speechLanguage = null;
-  if (audioContext && audioContext.state !== 'closed') audioContext.close().catch(() => {});
+  disposeEngine();
+  if (audioContext && audioContext.state !== 'closed') {
+    audioContext.close().catch(() => {});
+  }
   audioContext = null;
 }
 
-export const neuralVoiceModelIds = MODEL_IDS;
+export const neuralVoiceModelIds = Object.freeze({
+  nele: 'Nele', anton: 'Anton', zoey: 'Zoey', easton: 'Easton'
+});
