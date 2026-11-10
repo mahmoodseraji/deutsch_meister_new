@@ -9,6 +9,9 @@ const CORE = [
   './assets/icon-192.png', './assets/icon-512.png',
   './assets/voice-samples/nele.ogg', './assets/voice-samples/anton.ogg',
   './assets/voice-samples/zoey.ogg', './assets/voice-samples/easton.ogg',
+];
+];
+const OPTIONAL_RUNTIME = [
   './vendor/phonon-tts/index.js', './vendor/phonon-tts/worker.js',
   './vendor/phonon-tts/fetch.js', './vendor/phonon-tts/hub.js',
   './vendor/phonon-tts/wav.js', './vendor/phonon-tts/threads.js',
@@ -33,7 +36,14 @@ const PHONON_MODEL_FILES = [
 ];
 
 self.addEventListener('install', event => {
-  event.waitUntil(caches.open(CACHE).then(cache => cache.addAll(CORE)).then(() => self.skipWaiting()));
+  event.waitUntil((async () => {
+    const cache = await caches.open(CACHE);
+    await cache.addAll(CORE);
+    const runtimeResults = await Promise.allSettled(OPTIONAL_RUNTIME.map(path => cache.add(path)));
+    const missing = runtimeResults.filter(result => result.status === 'rejected').length;
+    if (missing) console.warn(`Phonon runtime is not fully precached (${missing} files). Run npm install && npm run vendor:phonon, then redeploy.`);
+    await self.skipWaiting();
+  })());
 });
 
 self.addEventListener('activate', event => {
