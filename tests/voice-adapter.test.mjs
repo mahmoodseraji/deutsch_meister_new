@@ -21,7 +21,7 @@ test('supports four named voices and independent language selection',()=>{
 test('downloads only selected voices, retains system fallback, and removes Phonon cache',()=>{
  assert.match(app,/downloadNeuralVoice\(id/);
  assert.match(app,/System voice remains available/);
- assert.match(manager,/caches\.delete\(url\)/);
+ assert.match(manager,/cache\.delete\(url\)/);
  assert.match(manager,/deleteAllNeuralVoices/);
  assert.match(manager,/CACHE_NAME = 'phonon-tts-v1'/);
 });
