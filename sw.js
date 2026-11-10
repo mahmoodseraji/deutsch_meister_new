@@ -1,22 +1,34 @@
-const CACHE = 'deutsch-meister-v3.6.7';
-const RUNTIME_CACHE = 'deutsch-meister-voice-runtime-v1';
+const CACHE = 'deutsch-meister-v3.7.0';
+const RUNTIME_CACHE = 'phonon-tts-v1';
 const PREFIX = 'deutsch-meister-';
 const CORE = [
   './', './index.html', './manifest.json',
   './css/tokens.css', './css/app.css',
   './js/app.js', './js/csv.js', './js/db.js',
   './js/scheduler.js', './js/study-session.js', './js/flashcard.js', './js/challenges.js', './js/voice-manager.js',
-  './js/voice-worker.js', './js/piper-core.js',
-  './assets/icon-192.png', './assets/icon-512.png'
+  './assets/icon-192.png', './assets/icon-512.png',
+  './assets/voice-samples/nele.ogg', './assets/voice-samples/anton.ogg',
+  './assets/voice-samples/zoey.ogg', './assets/voice-samples/easton.ogg',
+  './vendor/phonon-tts/index.js', './vendor/phonon-tts/worker.js',
+  './vendor/phonon-tts/fetch.js', './vendor/phonon-tts/hub.js',
+  './vendor/phonon-tts/wav.js', './vendor/phonon-tts/threads.js',
+  './vendor/phonon-tts/device.js', './vendor/phonon-tts/simd.js',
+  './vendor/phonon-tts/wasm/phonon_tts.js',
+  './vendor/phonon-tts/wasm/phonon_tts_simd_bg.wasm',
+  './vendor/phonon-tts/wasm-threads/phonon_tts.js',
+  './vendor/phonon-tts/wasm-threads/phonon_tts_simd_bg.wasm',
+  './vendor/phonon-tts/LICENSE-MIT', './vendor/phonon-tts/LICENSE-APACHE',
+  './vendor/phonon-tts/THIRD_PARTY_LICENSES.md'
 ];
-const RUNTIME_FILES = Object.freeze({
-  'ort.wasm.min.js': 'https://cdnjs.cloudflare.com/ajax/libs/onnxruntime-web/1.18.0/ort.wasm.min.js',
-  'ort-wasm-simd.wasm': 'https://cdnjs.cloudflare.com/ajax/libs/onnxruntime-web/1.18.0/ort-wasm-simd.wasm',
-  'ort-wasm.wasm': 'https://cdnjs.cloudflare.com/ajax/libs/onnxruntime-web/1.18.0/ort-wasm.wasm',
-  'piper_phonemize.js': 'https://cdn.jsdelivr.net/npm/@diffusionstudio/piper-wasm@1.0.0/build/piper_phonemize.js',
-  'piper_phonemize.wasm': 'https://cdn.jsdelivr.net/npm/@diffusionstudio/piper-wasm@1.0.0/build/piper_phonemize.wasm',
-  'piper_phonemize.data': 'https://cdn.jsdelivr.net/npm/@diffusionstudio/piper-wasm@1.0.0/build/piper_phonemize.data'
-});
+const PHONON_MODEL_FILES = [
+  './models/phonon/model.q8.gguf',
+  './models/phonon/tokenizer.json',
+  './models/phonon/config.json',
+  './models/phonon/voices/nele.safetensors',
+  './models/phonon/voices/anton.safetensors',
+  './models/phonon/voices/zoey.safetensors',
+  './models/phonon/voices/easton.safetensors'
+];
 
 self.addEventListener('install', event => {
   event.waitUntil(caches.open(CACHE).then(cache => cache.addAll(CORE)).then(() => self.skipWaiting()));
@@ -24,7 +36,7 @@ self.addEventListener('install', event => {
 
 self.addEventListener('activate', event => {
   event.waitUntil(caches.keys().then(keys => Promise.all(
-    keys.filter(key => key.startsWith(PREFIX) && key !== CACHE && key !== RUNTIME_CACHE).map(key => caches.delete(key))
+    keys.filter(key => key.startsWith(PREFIX) && key !== CACHE).map(key => caches.delete(key))
   )).then(() => self.clients.claim()));
 });
 
@@ -33,28 +45,26 @@ self.addEventListener('fetch', event => {
   const url = new URL(event.request.url);
   if (url.origin !== self.location.origin) return;
 
-  const runtimeName = url.pathname.split('/').pop();
-  const runtimeUrl = url.pathname.includes('/runtime/') ? RUNTIME_FILES[runtimeName] : null;
-  if (runtimeUrl) {
+  // Phonon fetches its model/voice files itself and stores their complete responses
+  // in phonon-tts-v1. The service worker serves local model files from the app shell
+  // cache so the first download works offline after the shell is installed.
+  if (PHONON_MODEL_FILES.some(path => new URL(path, self.registration.scope).href === url.href)) {
     event.respondWith((async () => {
-      const cache = await caches.open(RUNTIME_CACHE);
+      const cache = await caches.open(CACHE);
       const cached = await cache.match(event.request);
       if (cached) return cached;
       try {
-        const response = await fetch(runtimeUrl, { mode: 'cors', credentials: 'omit' });
-        if (response.ok && response.type !== 'opaque') await cache.put(event.request, response.clone());
+        const response = await fetch(event.request);
+        if (response.ok) await cache.put(event.request, response.clone());
         return response;
       } catch {
-        return new Response('Voice runtime asset is not cached and the device is offline.', {
-          status: 503, headers: { 'Content-Type': 'text/plain; charset=utf-8' }
-        });
+        return new Response('Phonon model asset is unavailable offline.', { status: 503 });
       }
     })());
     return;
   }
 
   event.respondWith(caches.open(CACHE).then(async cache => {
-    // ignoreSearch: '/?utm=x' or '/index.html?x' must hit the cached shell instead of polluting the cache.
     const cached = await cache.match(event.request, { ignoreSearch: event.request.mode === 'navigate' });
     if (cached) return cached;
     try {
