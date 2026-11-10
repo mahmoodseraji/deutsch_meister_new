@@ -27,7 +27,7 @@ The Phonon 40M multilingual checkpoint and voice catalogue assets are already st
 
 ## Build automation
 
-The migration branch CI vendors the pinned runtime, runs syntax and regression checks, and commits the generated `vendor/phonon-tts` files to this branch after successful checks. The `main` branch is not modified.
+The migration branch CI vendors the pinned runtime, runs syntax and regression checks, and commits the generated `vendor/phonon-tts` files to this branch after successful checks. The `main` branch is not modified. The vendored package is checked against the exact 0.4.2 version.
 
 ## Existing learning features
 
