@@ -54,5 +54,7 @@ jobs:
             echo "Vendored runtime is already up to date."
           else
             git commit -m "Vendor phonon-tts 0.4.2 runtime"
+            git fetch origin "${GITHUB_REF_NAME}"
+            git rebase FETCH_HEAD
             git push origin "HEAD:${GITHUB_REF_NAME}"
           fi
