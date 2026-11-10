@@ -134,16 +134,25 @@
         <label class="setting-row"><span>Speech speed</span><select id="speechRate" class="field"><option value="0.75">Slow</option><option value="0.88">Normal</option><option value="1">Fast</option></select></label>
       </section>
       <section class="settings-section"><h2>Pronunciation</h2>
-        <label class="setting-row"><span>German voice</span><select id="germanSpeechVoice" class="field"><option value="system">System voice</option><option value="jarvis">Jarvis · Neural</option></select></label>
-        <label class="setting-row"><span>English voice</span><select id="englishSpeechVoice" class="field"><option value="system">System voice</option><option value="amy">Amy · Neural</option></select></label>
-        <div id="voiceDownloadStatus" class="status-line" aria-live="polite">Jarvis and Amy download automatically on first launch (about 126 MB total).</div>
+        <p class="muted small">Listen to the short samples before choosing. System voices work immediately. Phonon voices are downloaded only when you request them.</p>
+        <label class="setting-row"><span>German voice</span><select id="germanSpeechVoice" class="field"><option value="system">System voice</option><option value="nele">Nele · Female</option><option value="anton">Anton · Male</option></select></label>
+        <div class="voice-sample-grid">
+          <div class="voice-sample"><div><b>Nele</b><small>German · female</small></div><audio controls preload="none" src="./assets/voice-samples/nele.ogg" aria-label="Nele German voice sample"></audio></div>
+          <div class="voice-sample"><div><b>Anton</b><small>German · male</small></div><audio controls preload="none" src="./assets/voice-samples/anton.ogg" aria-label="Anton German voice sample"></audio></div>
+        </div>
+        <label class="setting-row"><span>English voice</span><select id="englishSpeechVoice" class="field"><option value="system">System voice</option><option value="zoey">Zoey · Female</option><option value="easton">Easton · Male</option></select></label>
+        <div class="voice-sample-grid">
+          <div class="voice-sample"><div><b>Zoey</b><small>US English · female</small></div><audio controls preload="none" src="./assets/voice-samples/zoey.ogg" aria-label="Zoey English voice sample"></audio></div>
+          <div class="voice-sample"><div><b>Easton</b><small>US English · male</small></div><audio controls preload="none" src="./assets/voice-samples/easton.ogg" aria-label="Easton English voice sample"></audio></div>
+        </div>
+        <div id="voiceDownloadStatus" class="status-line" aria-live="polite">System voices are ready. Choose a sample, then select and download your preferred Phonon voice.</div>
         <div id="voiceProgressTrack" class="voice-progress" hidden><span id="voiceProgressBar"></span></div>
-        <div class="voice-actions"><button class="button button-outline" id="deleteVoiceModels">Delete downloaded voices</button><button class="button button-outline" id="downloadVoiceModels" hidden>Download voices again</button></div>
-        <details class="voice-diagnostics"><summary>Neural voice diagnostics</summary><p id="voiceDiagnosticStatus" class="status-line" aria-live="polite">No neural speech test has been run.</p><ol id="voiceDiagnosticLog" class="voice-diagnostic-log"></ol></details>
-        <p class="muted small">Models and speech engine are saved on this device for offline use. System voices remain available.</p>
+        <div class="voice-actions"><button class="button button-outline" id="downloadVoiceModels" hidden>Download selected voices</button><button class="button button-outline" id="deleteVoiceModels" hidden>Delete downloaded voices</button></div>
+        <details class="voice-diagnostics"><summary>Phonon diagnostics</summary><p id="voiceDiagnosticStatus" class="status-line" aria-live="polite">No Phonon speech test has been run.</p><ol id="voiceDiagnosticLog" class="voice-diagnostic-log"></ol></details>
+        <p class="muted small">The shared multilingual model is about 75 MB on first download. Selected voice embeddings are stored separately. Once installed, Phonon can speak offline on supported browsers. System voices remain available.</p>
         <details class="voice-credits"><summary>Voice credits and licences</summary>
-          <p class="muted small">German Jarvis by ufozone · CC BY-NC-SA 4.0. <a href="https://huggingface.co/ufozone/piper-de_DE-jarvis-medium" target="_blank" rel="noopener noreferrer">Model source</a>.</p>
-          <p class="muted small">English Amy · based on the MycroftAI Mimic 3 voice dataset · CC BY-SA 4.0. <a href="https://huggingface.co/rhasspy/piper-voices/tree/v1.0.0/en/en_US/amy/medium" target="_blank" rel="noopener noreferrer">Model source</a> · <a href="https://github.com/MycroftAI/mimic3-voices/blob/master/LICENSE" target="_blank" rel="noopener noreferrer">Dataset licence</a>.</p>
+          <p class="muted small">Phonon 40M multilingual model by Gradium · CC BY-NC 4.0. This model is for non-commercial use. <a href="https://huggingface.co/gradium/phonon-40m-multilingual" target="_blank" rel="noopener noreferrer">Model and licence</a>.</p>
+          <p class="muted small">Voice embeddings and preview recordings from <a href="https://huggingface.co/gradium/phonon-voices" target="_blank" rel="noopener noreferrer">Gradium's Phonon voice catalogue</a>. Browser runtime phonon-tts 0.4.2 · MIT OR Apache-2.0.</p>
         </details>
       </section>
       <section class="settings-section"><h2>Data and backup</h2>
@@ -153,7 +162,7 @@
         <button class="text-button" id="resetProgress">Reset learning progress (keep words)</button>
         <div class="danger-zone"><p>Delete all manually added and imported vocabulary.</p><button class="button button-danger" id="deletePersonalWords">Delete all vocabulary</button></div>
       </section>
-      <p class="app-version">DEUTSCH MEISTER · VERSION 3.6.7</p>
+      <p class="app-version">DEUTSCH MEISTER · VERSION 3.7.0</p>
     </section>
   </main>
 
