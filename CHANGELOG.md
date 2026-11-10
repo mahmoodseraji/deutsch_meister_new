@@ -1,3 +1,16 @@
+## 3.7.0 — Phonon pronunciation migration
+
+- Replaced Piper voice coordination with the official pinned `phonon-tts` 0.4.2 browser runtime adapter.
+- Added four selectable voices with static audition samples: Nele and Anton (German), Zoey and Easton (US English).
+- German and English voice preferences are independent and persist in the existing settings store.
+- Neural voice downloads are explicit, not automatic. The shared q8 multilingual model is cached once; only the chosen speaker embedding is preloaded.
+- Added deletion of Phonon model and voice cache entries without touching vocabulary, review logs, or schedules.
+- Kept system speech available as the default and as a fallback after a Phonon error.
+- Added a pinned runtime vendoring script and service-worker precaching for the local runtime and audition recordings.
+- Preserved the existing IndexedDB stores, CSV/JSON tools, user vocabulary, challenges, quizzes, Leitner and SM-2 scheduling.
+
+**Validation status:** source changes are committed to the migration branch. The vendored runtime directory still has to be generated with `npm install && npm run vendor:phonon`; full automated and physical-device playback tests have not yet been run. Do not publish this branch as a verified release until those steps pass.
+
 ## 3.6.7 — Review reliability, status drill-down and focused card layout
 
 - Unrated new words are no longer marked as introduced; they return to the next session after interruption or app closure.

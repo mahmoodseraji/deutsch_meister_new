@@ -54,7 +54,7 @@ test('IndexedDB schema remains version 2 and existing stores are retained', () =
 });
 
 test('service worker cache is bumped and precaches the new study-session module', () => {
-  assert.match(sw, /deutsch-meister-v3\.6\.7/);
+  assert.match(sw, /deutsch-meister-v3\.7\.0/);
   assert.match(sw, /study-session\.js/);
   assert.match(sw, /flashcard\.js/);
 });

@@ -41,7 +41,7 @@ test('swipe classes are reset for each card and the swipe animation is not overr
 });
 
 test('service worker cache is versioned 3.6.7 and navigation ignores query strings', () => {
-  assert.match(sw, /deutsch-meister-v3\.6\.7/);
+  assert.match(sw, /deutsch-meister-v3\.7\.0/);
   assert.match(sw, /ignoreSearch/);
 });
 
