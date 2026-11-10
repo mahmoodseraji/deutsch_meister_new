@@ -10,7 +10,7 @@ on:
   workflow_dispatch:
 
 permissions:
-  contents: read
+  contents: write
 
 jobs:
   checks:
@@ -43,3 +43,16 @@ jobs:
           test -s vendor/phonon-tts/wasm-threads/phonon_tts_bg.wasm
           test -s vendor/phonon-tts/LICENSE-MIT
           test -s vendor/phonon-tts/LICENSE-APACHE
+
+      - name: Commit the pinned local runtime to the migration branch
+        if: github.event_name == 'push' && github.actor != 'github-actions[bot]'
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add vendor/phonon-tts
+          if git diff --cached --quiet; then
+            echo "Vendored runtime is already up to date."
+          else
+            git commit -m "Vendor phonon-tts 0.4.2 runtime"
+            git push origin "HEAD:${GITHUB_REF_NAME}"
+          fi
