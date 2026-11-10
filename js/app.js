@@ -5,9 +5,9 @@ import {hasLearningHistory,buildDailyStudyQueue,distributionFor,sm2LearningStage
 import {conjugationRows,dictionaryHref} from './flashcard.js';
 import {parseCSV} from './csv.js';
 import {stripArticle,formatPlural,pluralOptions,getArticle,inferPartOfSpeech,buildVerbBank,buildVerbQuestions,uniqueOptions,shuffle} from './challenges.js';
-import {prepareVoiceModels, speakNeural, terminateNeuralWorker, deleteNeuralVoice} from './voice-manager.js';
+import {getVoiceStorageStatus,downloadNeuralVoice,speakNeural,terminateNeuralWorker,deleteAllNeuralVoices} from './voice-manager.js';
 const $=id=>document.getElementById(id),uid=()=>crypto.randomUUID?crypto.randomUUID():`${Date.now()}-${Math.random().toString(16).slice(2)}`;
-const SETTING_DEFAULTS={theme:'dark',dailyGoal:10,newWordsPerDay:10,algorithm:'sm2',speechRate:.88,germanVoiceMode:'system',englishVoiceMode:'system',voiceModelsDisabled:false,v3StartedOn:null};
+const SETTING_DEFAULTS={theme:'dark',dailyGoal:10,newWordsPerDay:10,algorithm:'sm2',speechRate:.88,germanVoiceMode:'system',englishVoiceMode:'system',v3StartedOn:null};
 const ALGORITHMS=['sm2','leitner'],THEMES=['dark','light','system'],GOALS=[5,10,15,20,30],RATES=[.75,.88,1];
 // Settings come from IndexedDB or a user-supplied backup file, so never trust them blindly:
 // an unknown algorithm name makes the scheduler throw and the app would fail to start.
@@ -19,14 +19,13 @@ function sanitizeSettings(raw={}){
  if(GOALS.includes(num(r.dailyGoal)))out.dailyGoal=num(r.dailyGoal);
  if(GOALS.includes(num(r.newWordsPerDay)))out.newWordsPerDay=num(r.newWordsPerDay);
  if(RATES.includes(num(r.speechRate)))out.speechRate=num(r.speechRate);
- if(['system','jarvis'].includes(r.germanVoiceMode))out.germanVoiceMode=r.germanVoiceMode;
- if(['system','amy'].includes(r.englishVoiceMode))out.englishVoiceMode=r.englishVoiceMode;
- if(typeof r.voiceModelsDisabled==='boolean')out.voiceModelsDisabled=r.voiceModelsDisabled;
+ out.germanVoiceMode=['system','nele','anton'].includes(r.germanVoiceMode)?r.germanVoiceMode:'system';
+ out.englishVoiceMode=['system','zoey','easton'].includes(r.englishVoiceMode)?r.englishVoiceMode:'system';
  if(typeof r.v3StartedOn==='string'&&/^\d{4}-\d{2}-\d{2}$/.test(r.v3StartedOn))out.v3StartedOn=r.v3StartedOn;
  return out;
 }
 let words=[],settings={},logs=[],sessions=[],currentView='home',studyQueue=[],studyIndex=0,currentWord=null,exercise=null,toastTimer,libraryLimit=100;
-const voiceModelReady={jarvis:false,amy:false};const voiceModelState={jarvis:'Preparing',amy:'Preparing'};let voiceSetupRunning=false,voiceSetupRetryRequested=false,voiceFailureShown=false;
+const voiceModelReady={nele:false,anton:false,zoey:false,easton:false};let voiceFailureShown=false,voiceDownloadRunning=false;
 function applyLanguage(){document.documentElement.lang='en';}
 function toast(msg){const el=$('toast');el.textContent=msg;el.classList.add('show');clearTimeout(toastTimer);toastTimer=setTimeout(()=>el.classList.remove('show'),2400)}
 function activeWords(){return words}
@@ -54,7 +53,7 @@ async function init(){
   try{localStorage.removeItem('deutsch-meister-piper-preloaded-v1')}catch{}
   const db=await openDB();setDB(db);
   [words,logs,sessions]=await Promise.all([all('words'),all('reviewLogs'),all('sessions')]);
-  settings={theme:await getSetting('theme','dark'),dailyGoal:await getSetting('dailyGoal',10),algorithm:await getSetting('algorithm','sm2'),speechRate:await getSetting('speechRate',.88),germanVoiceMode:await getSetting('germanVoiceMode','system'),englishVoiceMode:await getSetting('englishVoiceMode','system'),voiceModelsDisabled:await getSetting('voiceModelsDisabled',false),newWordsPerDay:await getSetting('newWordsPerDay',10),v3StartedOn:await getSetting('v3StartedOn',null)};
+  settings={theme:await getSetting('theme','dark'),dailyGoal:await getSetting('dailyGoal',10),algorithm:await getSetting('algorithm','sm2'),speechRate:await getSetting('speechRate',.88),germanVoiceMode:await getSetting('germanVoiceMode','system'),englishVoiceMode:await getSetting('englishVoiceMode','system'),newWordsPerDay:await getSetting('newWordsPerDay',10),v3StartedOn:await getSetting('v3StartedOn',null)};
   settings={...SETTING_DEFAULTS,...sanitizeSettings(settings)};
   // Ask the browser not to evict the learner's progress under storage pressure (Safari/iOS in particular).
   try{navigator.storage?.persist?.()}catch{}
@@ -66,7 +65,7 @@ async function init(){
   for(const w of words){const upgraded=ensureSchedules(w,settings.algorithm);if(JSON.stringify(upgraded)!==JSON.stringify(w))await put('words',upgraded);}
   words=await all('words');applyTheme();applyLanguage();bind();renderAll();
   registerOfflineWorker();
-  window.addEventListener('online',()=>{if(navigator.serviceWorker?.controller){if(voiceSetupRunning)voiceSetupRetryRequested=true;else startVoiceModelSetup();}});
+  refreshVoiceStorageStatus().catch(error=>console.warn('Phonon cache status unavailable:',error));
   window.addEventListener('pagehide',terminateNeuralWorker);
   let shownDay=today();document.addEventListener('visibilitychange',()=>{if(document.visibilityState==='hidden')terminateNeuralWorker();else if(today()!==shownDay){shownDay=today();if(!currentWord)renderAll();}});
  }catch(e){
@@ -76,31 +75,18 @@ async function init(){
  }
 }
 
-let offlineWorkerRegistered=false;
 async function registerOfflineWorker(){
  if(!('serviceWorker'in navigator)||!location.protocol.startsWith('http')){
-  setVoiceStatus('System voices are available. Offline neural voices require a supported browser.');
+  setVoiceStatus('System voices are available. Offline app caching requires HTTPS or localhost.');
   return;
  }
- const startWhenControlled=()=>{
-  if(!navigator.serviceWorker.controller||offlineWorkerRegistered)return;
-  offlineWorkerRegistered=true;
-  startVoiceModelSetup();
- };
- navigator.serviceWorker.addEventListener('controllerchange',startWhenControlled);
  try{
   await navigator.serviceWorker.register('./sw.js');
   await navigator.serviceWorker.ready;
-  startWhenControlled();
-  if(!navigator.serviceWorker.controller){
-   setVoiceStatus('System voices are ready. Preparing offline voice storage…');
-   setTimeout(()=>{
-    if(!navigator.serviceWorker.controller)setVoiceStatus('System voices are ready. Reload once to prepare offline neural voices.');
-   },10000);
-  }
+  setVoiceStatus('System voices are available. Choose a sample, then download only the Phonon voices you want.');
  }catch(error){
-  console.warn('Offline cache could not be prepared:',error);
-  setVoiceStatus('System voices are available. Offline neural voices could not be prepared.');
+  console.warn('Offline app shell could not be prepared:',error);
+  setVoiceStatus('System voices are available. Offline app caching could not be prepared.');
  }
 }
 async function migrateLegacyHistory(){if(await getSetting('v3HistoryMigrated',false))return;const legacyActivity=await getSetting('activityByDate',{}),legacyStreak=await getSetting('streakDays',[]);for(const [date,entry] of Object.entries(legacyActivity||{})){for(const wordId of entry.reviewedWordIds||[]){await put('reviewLogs',{id:`v2-review-${date}-${wordId}`,date,type:'review',wordId,rating:'legacy',legacy:true});}for(let i=0;i<(entry.quizzes||0);i++){await put('reviewLogs',{id:`v2-quiz-${date}-${i}`,date,type:'quiz',correct:0,total:0,legacy:true});}}for(const date of legacyStreak||[]){await put('reviewLogs',{id:`v2-streak-${date}`,date,type:'legacy'});}logs=await all('reviewLogs');await setSetting('v3HistoryMigrated',true);}
@@ -242,77 +228,100 @@ function openEditor(w=null){$('wordEditor').hidden=false;$('editorTitle').textCo
 async function saveEditor(e){e.preventDefault();const id=$('editId').value||uid(),old=words.find(w=>w.id===id)||{};const typed=$('fieldGerman').value.trim().toLocaleLowerCase();if(!typed)return toast('Please enter the German word.');if(words.some(x=>x.id!==id&&String(x.german||'').trim().toLocaleLowerCase()===typed))return toast('This word is already in your library.');const w=ensureSchedules({...old,id,german:$('fieldGerman').value.trim(),translation:$('fieldTranslation').value.trim(),article:$('fieldArticle').value.trim(),plural:$('fieldPlural').value.trim(),example:$('fieldExample').value.trim(),exampleEn:$('fieldNotes').value.trim(),category:old.category||'Imported',partOfSpeech:$('fieldPartOfSpeech').value.trim(),presentIch:$('fieldPresentIch')?.value.trim()||'',presentDu:$('fieldPresentDu').value.trim(),presentEr:$('fieldPresentEr').value.trim(),presentWir:$('fieldPresentWir')?.value.trim()||'',presentIhr:$('fieldPresentIhr')?.value.trim()||'',presentSie:$('fieldPresentSie')?.value.trim()||'',prateritum:$('fieldPrateritum').value.trim(),perfekt:$('fieldPerfekt').value.trim(),auxiliary:$('fieldAuxiliary').value,source:'personal',active:true,box:old.box||1,repetitions:old.repetitions||0,easeFactor:old.easeFactor||2.5,interval:old.interval||0,dueDate:old.dueDate||today(),favorite:old.favorite||false,createdAt:old.createdAt||new Date().toISOString()},settings.algorithm);await put('words',w);words=await all('words');$('wordEditor').hidden=true;e.target.reset();renderAll();toast('Word saved.');}
 function renderVoiceSettings(){
  const german=$('germanSpeechVoice'),english=$('englishSpeechVoice');
- if(german){const option=german.querySelector('option[value="jarvis"]');if(option){option.disabled=!voiceModelReady.jarvis;option.textContent=voiceModelReady.jarvis?'Jarvis · Neural':`Jarvis · ${voiceModelState.jarvis}`;}if(settings.germanVoiceMode==='jarvis'&&!voiceModelReady.jarvis)german.value='system';else german.value=settings.germanVoiceMode||'system';}
- if(english){const option=english.querySelector('option[value="amy"]');if(option){option.disabled=!voiceModelReady.amy;option.textContent=voiceModelReady.amy?'Amy · Neural':`Amy · ${voiceModelState.amy}`;}if(settings.englishVoiceMode==='amy'&&!voiceModelReady.amy)english.value='system';else english.value=settings.englishVoiceMode||'system';}
- const removeButton=$('deleteVoiceModels'),downloadButton=$('downloadVoiceModels');if(removeButton)removeButton.hidden=!!settings.voiceModelsDisabled||(!voiceModelReady.jarvis&&!voiceModelReady.amy);if(downloadButton)downloadButton.hidden=!settings.voiceModelsDisabled;
+ if(german)german.value=settings.germanVoiceMode||'system';
+ if(english)english.value=settings.englishVoiceMode||'system';
+ const selected=[settings.germanVoiceMode,settings.englishVoiceMode].filter(id=>id&&id!=='system');
+ const needsDownload=selected.some(id=>!voiceModelReady[id]);
+ const anyDownloaded=Object.values(voiceModelReady).some(Boolean);
+ const downloadButton=$('downloadVoiceModels'),removeButton=$('deleteVoiceModels');
+ if(downloadButton){downloadButton.hidden=!selected.length||!needsDownload;downloadButton.disabled=voiceDownloadRunning;}
+ if(removeButton){removeButton.hidden=!anyDownloaded;removeButton.disabled=voiceDownloadRunning;}
 }
-
 function setVoiceStatus(message,percent=null){
  const status=$('voiceDownloadStatus');if(status)status.textContent=message;
  const track=$('voiceProgressTrack'),bar=$('voiceProgressBar');
  if(track)track.hidden=percent===null;
  if(bar&&percent!==null)bar.style.width=`${Math.max(0,Math.min(100,percent))}%`;
 }
-async function startVoiceModelSetup(){
- if(voiceSetupRunning)return;
- voiceSetupRunning=true;
- setVoiceStatus(navigator.onLine?'Preparing offline speech and voice models…':'Checking voices saved on this device…',0);
- try{
-  const result=await prepareVoiceModels(progress=>{
-   if(progress.voice==='runtime'){
-    if(progress.state==='starting')setVoiceStatus('Preparing the offline speech engine…',null);
-    else if(progress.state==='downloading')setVoiceStatus(`Preparing speech engine · ${progress.fileName||'runtime files'}`,null);
-    else if(progress.state==='ready')setVoiceStatus('Speech engine is ready. Preparing voices…',8);
-    else if(progress.state==='error')setVoiceStatus('The speech engine could not be prepared. System voices remain available.',null);
-    return;
-   }
-   const label=progress.voice==='jarvis'?'Jarvis · German':'Amy · English';
-   if(progress.state==='ready'){
-    voiceModelReady[progress.voice]=true;voiceModelState[progress.voice]='Ready';renderVoiceSettings();
-    setVoiceStatus(`${label} is ready.`,progress.voice==='jarvis'?55:100);
-   }else if(progress.state==='starting'){voiceModelState[progress.voice]='Downloading';renderVoiceSettings();setVoiceStatus(`Starting ${label} download…`,progress.voice==='jarvis'?8:55);}
-   else if(progress.state==='downloading'){
-    const pct=progress.total?Math.round(progress.loaded/progress.total*100):0;
-    setVoiceStatus(`Downloading ${label} · ${pct}%`,progress.voice==='jarvis'?8+pct*.47:55+pct*.45);
-   }else if(progress.state==='pending'){voiceModelState[progress.voice]='Waiting for internet';renderVoiceSettings();setVoiceStatus('Voice models will download automatically when you are online.',null);}
-   else if(progress.state==='retrying'){voiceModelState[progress.voice]='Retrying';renderVoiceSettings();setVoiceStatus(`Connection interrupted. Retrying ${label}…`,null);}
-   else if(progress.state==='error'){voiceModelState[progress.voice]='Unavailable';renderVoiceSettings();setVoiceStatus(`${label} could not be downloaded. System voice remains available.`,null);}
-  },navigator.onLine&&!settings.voiceModelsDisabled);
-  const stored=new Set(result.stored||[]);
-  const runtimeReady=!result.runtimeError;
-  voiceModelReady.jarvis=runtimeReady&&stored.has('de_DE-jarvis-medium');
-  voiceModelReady.amy=runtimeReady&&stored.has('en_US-amy-medium');
-  if(!voiceModelReady.jarvis&&settings.germanVoiceMode==='jarvis'){settings.germanVoiceMode='system';await setSetting('germanVoiceMode','system');}
-  if(!voiceModelReady.amy&&settings.englishVoiceMode==='amy'){settings.englishVoiceMode='system';await setSetting('englishVoiceMode','system');}
-  renderVoiceSettings();
-  if(result.runtimeError){
-   voiceModelState.jarvis='Unavailable';voiceModelState.amy='Unavailable';renderVoiceSettings();
-   setVoiceStatus('Offline speech engine unavailable. System voices are selected; neural voices will retry when online.',null);
-  }else if(result.errors?.length){
-   for(const item of result.errors)voiceModelState[item.voice]='Unavailable';
-   const failed=result.errors.map(x=>x.voice==='jarvis'?'Jarvis':'Amy').join(' and ');
-   if(result.errors.some(x=>x.voice==='jarvis')&&settings.germanVoiceMode==='jarvis'){settings.germanVoiceMode='system';await setSetting('germanVoiceMode','system');}
-   if(result.errors.some(x=>x.voice==='amy')&&settings.englishVoiceMode==='amy'){settings.englishVoiceMode='system';await setSetting('englishVoiceMode','system');}
-   renderVoiceSettings();
-   setVoiceStatus(`${failed} could not be downloaded. System voices are selected instead.`,null);
-  }else if(result.pending?.length){
-   for(const voice of result.pending)voiceModelState[voice]='Waiting for internet';
-   renderVoiceSettings();
-   setVoiceStatus('Voice models will download automatically when you are online.',null);
-  }else if(settings.voiceModelsDisabled){setVoiceStatus('Neural voices are deleted or disabled. System voices remain available.',null);}else setVoiceStatus('Both neural voices are saved for offline use.',100);
- }catch(error){
-  console.error('Neural voice setup failed:',error);
-  setVoiceStatus('Neural voices could not be prepared. System voices remain available.',null);
- }finally{voiceSetupRunning=false;if(voiceSetupRetryRequested&&navigator.onLine&&navigator.serviceWorker?.controller){voiceSetupRetryRequested=false;queueMicrotask(startVoiceModelSetup);}}
+async function refreshVoiceStorageStatus(){
+ const result=await getVoiceStorageStatus();
+ Object.assign(voiceModelReady,result.voices||{});
+ renderVoiceSettings();
+ const selected=[settings.germanVoiceMode,settings.englishVoiceMode].filter(id=>id&&id!=='system');
+ if(selected.some(id=>voiceModelReady[id]))setVoiceStatus('Your selected Phonon voice is ready for offline use.');
+ else if(result.anyDownloaded)setVoiceStatus('Phonon voices are saved on this device. Select one to use it.');
+ else setVoiceStatus('Listen to the samples below. System voices work immediately; download only the Phonon voices you choose.');
 }
-
+async function downloadSelectedVoices(){
+ if(voiceDownloadRunning)return;
+ const selected=[...new Set([settings.germanVoiceMode,settings.englishVoiceMode].filter(id=>id&&id!=='system'&&!voiceModelReady[id]))];
+ if(!selected.length)return toast('Choose a Phonon voice first.');
+ if(!navigator.onLine)return toast('Connect to the internet before downloading a voice.');
+ if(!confirm('Download the selected Phonon voice(s)? The shared multilingual model is about 75 MB on the first download. Additional selected voice embeddings are small.'))return;
+ voiceDownloadRunning=true;renderVoiceSettings();
+ try{
+  for(let i=0;i<selected.length;i++){
+   const id=selected[i],label=id[0].toUpperCase()+id.slice(1);
+   setVoiceStatus(`Preparing ${label}…`,0);
+   const result=await downloadNeuralVoice(id,progress=>{
+    const file=String(progress.file||'voice files').replace('voice:','');
+    const pct=progress.total?Math.round(progress.loaded/progress.total*100):0;
+    const stage=progress.cached?'Reading saved':'Downloading';
+    setVoiceStatus(`${label}: ${stage} ${file} · ${pct}%`,pct);
+   });
+   Object.assign(voiceModelReady,result.voices||{});
+   setVoiceStatus(`${label} is installed and ready offline.`,100);
+  }
+  renderVoiceSettings();
+  setVoiceStatus('Selected Phonon voice(s) are installed for offline use.',100);
+  toast('Phonon voice download complete.');
+ }catch(error){
+  console.error('Phonon download failed:',error);
+  setVoiceStatus(`Voice download failed: ${error?.message||String(error)}. System voices remain available.`);
+  toast('Could not install the selected Phonon voice.');
+ }finally{voiceDownloadRunning=false;renderVoiceSettings();}
+}
+async function deleteDownloadedVoices(){
+ if(voiceDownloadRunning)return;
+ if(!confirm('Delete all downloaded Phonon voices and the shared model from this device? Your vocabulary and learning progress will not be affected.'))return;
+ voiceDownloadRunning=true;renderVoiceSettings();
+ try{
+  terminateNeuralWorker();
+  await deleteAllNeuralVoices();
+  for(const id of Object.keys(voiceModelReady))voiceModelReady[id]=false;
+  settings.germanVoiceMode='system';settings.englishVoiceMode='system';
+  await Promise.all([setSetting('germanVoiceMode','system'),setSetting('englishVoiceMode','system')]);
+  setVoiceStatus('Downloaded Phonon model and voices deleted. System voices are active.');
+  toast('Downloaded Phonon voices deleted.');
+ }catch(error){
+  setVoiceStatus(`Could not delete all Phonon files: ${error?.message||String(error)}`);
+  toast('Voice deletion failed.');
+ }finally{voiceDownloadRunning=false;renderVoiceSettings();}
+}
 async function speak(text,language='de'){
  if(!text?.trim())return toast(language==='de'?'No German text available.':'No English text available.');
  const voice=language==='de'?(settings.germanVoiceMode||'system'):(settings.englishVoiceMode||'system');
- const ready=voice==='jarvis'?voiceModelReady.jarvis:voice==='amy'?voiceModelReady.amy:false;
- if(voice!=='system'&&ready){
-  try{if('speechSynthesis'in window)speechSynthesis.cancel();await speakNeural(voice,text,Number(settings.speechRate||.88),stage=>{const label=`${voice==='jarvis'?'Jarvis':'Amy'}: ${stage}`;$('voiceDiagnosticStatus').textContent=label;const log=$('voiceDiagnosticLog');if(log){const item=document.createElement('li');item.textContent=`${new Date().toLocaleTimeString()} — ${label}`;log.prepend(item);while(log.children.length>12)log.lastChild.remove();}});$('voiceDiagnosticStatus').textContent='Neural audio playback completed.';return;}
-  catch(error){console.warn('Neural playback failed; using system speech.',error);$('voiceDiagnosticStatus').textContent=`Failed: ${error?.message||String(error)}`;if(!voiceFailureShown){toast('Neural speech failed. Using the system voice instead.');voiceFailureShown=true;}if(voice==='jarvis'){settings.germanVoiceMode='system';await setSetting('germanVoiceMode','system');}else{settings.englishVoiceMode='system';await setSetting('englishVoiceMode','system');}setVoiceStatus('Neural speech failed. System voice selected instead.');renderVoiceSettings();}
+ if(voice!=='system'){
+  if(!voiceModelReady[voice]){
+   setVoiceStatus('That Phonon voice is not installed yet. Use “Download selected voices” in Settings.');
+   toast('Download this Phonon voice in Settings first. Using the system voice for now.');
+  }else{
+   try{
+    if('speechSynthesis'in window)speechSynthesis.cancel();
+    await speakNeural(voice,text,Number(settings.speechRate||.88),stage=>{
+     $('voiceDiagnosticStatus').textContent=`${voice}: ${stage}`;
+     const log=$('voiceDiagnosticLog');
+     if(log){const item=document.createElement('li');item.textContent=`${new Date().toLocaleTimeString()} — ${voice}: ${stage}`;log.prepend(item);while(log.children.length>12)log.lastChild.remove();}
+    });
+    $('voiceDiagnosticStatus').textContent='Phonon audio playback completed.';
+    return;
+   }catch(error){
+    console.warn('Phonon playback failed; using system speech.',error);
+    $('voiceDiagnosticStatus').textContent=`Failed: ${error?.message||String(error)}`;
+    if(!voiceFailureShown){toast('Phonon playback failed. Using the system voice instead.');voiceFailureShown=true;}
+    setVoiceStatus(`Phonon playback failed: ${error?.message||String(error)}. System voice remains available.`);
+   }
+  }
  }
  terminateNeuralWorker();
  if(!('speechSynthesis'in window))return toast('Speech synthesis is not supported in this browser.');
@@ -420,6 +429,6 @@ async function deleteImportBatch(batchId){const batch=words.filter(w=>w.importBa
 function exportCsv(){const cols=['german','article','part_of_speech','translation_en','example_de','example_en','plural','present_ich','present_du','present_er_sie_es','present_wir','present_ihr','present_sie','prateritum','perfekt','perfekt_auxiliary','dictionary_url'];const personal=[...words];const map={german:'german',article:'article',part_of_speech:'partOfSpeech',translation_en:'translation',example_de:'example',example_en:'exampleEn',plural:'plural',present_ich:'presentIch',present_du:'presentDu',present_er_sie_es:'presentEr',present_wir:'presentWir',present_ihr:'presentIhr',present_sie:'presentSie',prateritum:'prateritum',perfekt:'perfekt',perfekt_auxiliary:'auxiliary',dictionary_url:'dictionaryUrl'};const q=v=>'"'+String(v??'').replace(/"/g,'""')+'"';download('deutsch-meister-vocabulary.csv','\ufeff'+[cols.join(','),...personal.map(w=>cols.map(c=>q(w[map[c]])).join(','))].join('\n'),'text/csv;charset=utf-8');$('dataStatus').textContent='CSV exported.';}
 function safeDictionaryHref(value){try{const raw=String(value||'').trim().replace(/\\([:.])/g,'$1');const url=new URL(raw);return url.protocol==='https:'?url.href:'';}catch{return '';}}
 function esc(s){return String(s??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));}
-function bind(){document.querySelectorAll('[data-nav]').forEach(b=>b.onclick=()=>showView(b.dataset.nav));document.querySelectorAll('[data-action="go-learn"]').forEach(b=>b.onclick=startStudy);document.querySelectorAll('[data-action="go-practice"]').forEach(b=>b.onclick=()=>showView('practice'));document.querySelectorAll('[data-action="go-library"]').forEach(b=>b.onclick=()=>showView('library'));$('settingsOpen').onclick=()=>showView('settings');$('startReview').onclick=startStudy;const flipCard=()=>{const card=$('studyCard');if(card.classList.contains('is-flipped'))card.classList.remove('is-flipped');else card.classList.add('is-flipped');};$('studyCard').addEventListener('click',e=>{if(e.target.closest('button,a'))return;flipCard();});$('studyCard').addEventListener('keydown',e=>{if((e.key==='Enter'||e.key===' ')&&!e.target.closest('button,a')){e.preventDefault();flipCard();}});['studySpeak','studyTranslationSpeak','studyExampleSpeakDe','studyExampleSpeakEn'].forEach(id=>$(id).addEventListener('click',e=>e.stopPropagation()));$('endReview').onclick=()=>{currentWord=null;studyQueue=[];studyIndex=0;$('studyCard').hidden=true;renderLearn();renderHome();};$('studySpeak').onclick=()=>speak(currentWord?.german,'de');$('studyTranslationSpeak').onclick=()=>speak(currentWord?.translation,'en');document.querySelectorAll('[data-rating]').forEach(b=>b.onclick=()=>rateWord(b.dataset.rating));$('addWordOpen').onclick=()=>openEditor();$('importCsvOpen').onclick=()=>$('importCsv').click();$('closeEditor').onclick=()=>$('wordEditor').hidden=true;$('wordEditor').onsubmit=saveEditor;$('personalWordList').onkeydown=e=>{if((e.key==='Enter'||e.key===' ')&&e.target.closest('[data-open-word]')&&!e.target.closest('button,a')){e.preventDefault();openWordDetail(words.find(x=>x.id===e.target.closest('[data-open-word]').dataset.openWord));}};$('personalWordList').onclick=async e=>{if(e.target.closest('a'))return;const ed=e.target.closest('[data-edit]'),del=e.target.closest('[data-delete]'),view=e.target.closest('[data-open-word]');if(ed){e.stopPropagation();openEditor(words.find(x=>x.id===ed.dataset.edit));}else if(del){e.stopPropagation();const target=words.find(x=>x.id===del.dataset.delete);if(!target)return;if(confirm(`Delete “${target.german}” permanently? Its review history will also be removed.`)){await remove('words',target.id);await removeMany('reviewLogs',logs.filter(x=>x.wordId===target.id).map(x=>x.id));words=await all('words');logs=await all('reviewLogs');renderAll();toast('Personal word deleted.');}}else if(view){openWordDetail(words.find(x=>x.id===view.dataset.openWord));}};$('methodSnapshot').onclick=e=>{const b=e.target.closest('[data-distribution-index]');if(b)openDistributionGroup(Number(b.dataset.distributionIndex));};$('distributionModalList').onclick=e=>{const b=e.target.closest('[data-open-word]');if(b){const w=words.find(x=>x.id===b.dataset.openWord);$('distributionModal').close();openWordDetail(w);}};$('wordDetailClose').onclick=()=>$('wordDetailModal').close();$('distributionClose').onclick=()=>$('distributionModal').close();$('wordSearch').oninput=()=>{libraryLimit=100;renderLibrary()};$('loadMoreWords').onclick=()=>{libraryLimit+=100;renderLibrary()};document.querySelectorAll('[data-exercise]').forEach(b=>b.onclick=()=>startExercise(b.dataset.exercise));$('closeExercise').onclick=()=>$('exercisePanel').hidden=true;$('exerciseChoices').onclick=e=>{const b=e.target.closest('[data-choice]');if(b)answerExercise(b.dataset.choice)};$('exerciseNext').onclick=nextExercise;$('exerciseAudio').onclick=()=>speak(exercise?.questions[exercise.index]?.speak);$('themeSelect').onchange=async()=>{settings.theme=$('themeSelect').value;await setSetting('theme',settings.theme);applyTheme()};$('dailyGoalSelect').onchange=async()=>{settings.dailyGoal=Number($('dailyGoalSelect').value);await setSetting('dailyGoal',settings.dailyGoal);renderHome()};$('newWordsPerDaySelect').onchange=async()=>{settings.newWordsPerDay=Number($('newWordsPerDaySelect').value);await setSetting('newWordsPerDay',settings.newWordsPerDay);renderHome();renderLearn();};$('algorithmSelect').onchange=async()=>{settings.algorithm=$('algorithmSelect').value;await setSetting('algorithm',settings.algorithm);renderAll();renderProgress();toast('Review method changed. Only the selected method is shown in Progress.');};$('speechRate').onchange=async()=>{settings.speechRate=Number($('speechRate').value);await setSetting('speechRate',settings.speechRate)};$('germanSpeechVoice').onchange=async()=>{settings.germanVoiceMode=$('germanSpeechVoice').value;if(settings.germanVoiceMode==='system')terminateNeuralWorker();await setSetting('germanVoiceMode',settings.germanVoiceMode)};$('englishSpeechVoice').onchange=async()=>{settings.englishVoiceMode=$('englishSpeechVoice').value;if(settings.englishVoiceMode==='system')terminateNeuralWorker();await setSetting('englishVoiceMode',settings.englishVoiceMode)};$('deleteVoiceModels').onclick=async()=>{if(!confirm('Delete the downloaded Jarvis and Amy voice models from this device? Your vocabulary and progress will not be affected. The speech engine files may remain cached.'))return;try{settings.germanVoiceMode='system';settings.englishVoiceMode='system';settings.voiceModelsDisabled=true;await Promise.all([setSetting('germanVoiceMode','system'),setSetting('englishVoiceMode','system'),setSetting('voiceModelsDisabled',true)]);terminateNeuralWorker();voiceModelReady.jarvis=false;voiceModelReady.amy=false;for(const voice of ['jarvis','amy'])await deleteNeuralVoice(voice);voiceModelState.jarvis='Deleted';voiceModelState.amy='Deleted';renderVoiceSettings();$('downloadVoiceModels').hidden=false;$('deleteVoiceModels').hidden=true;setVoiceStatus('Downloaded neural voices deleted. System voices are active.',null);toast('Neural voice models deleted.');}catch(error){$('voiceDiagnosticStatus').textContent=`Delete failed: ${error.message}`;toast('Could not delete all voice files.');}};$('downloadVoiceModels').onclick=async()=>{settings.voiceModelsDisabled=false;await setSetting('voiceModelsDisabled',false);$('downloadVoiceModels').hidden=true;$('deleteVoiceModels').hidden=false;voiceModelState.jarvis='Preparing';voiceModelState.amy='Preparing';renderVoiceSettings();startVoiceModelSetup();};
+function bind(){document.querySelectorAll('[data-nav]').forEach(b=>b.onclick=()=>showView(b.dataset.nav));document.querySelectorAll('[data-action="go-learn"]').forEach(b=>b.onclick=startStudy);document.querySelectorAll('[data-action="go-practice"]').forEach(b=>b.onclick=()=>showView('practice'));document.querySelectorAll('[data-action="go-library"]').forEach(b=>b.onclick=()=>showView('library'));$('settingsOpen').onclick=()=>showView('settings');$('startReview').onclick=startStudy;const flipCard=()=>{const card=$('studyCard');if(card.classList.contains('is-flipped'))card.classList.remove('is-flipped');else card.classList.add('is-flipped');};$('studyCard').addEventListener('click',e=>{if(e.target.closest('button,a'))return;flipCard();});$('studyCard').addEventListener('keydown',e=>{if((e.key==='Enter'||e.key===' ')&&!e.target.closest('button,a')){e.preventDefault();flipCard();}});['studySpeak','studyTranslationSpeak','studyExampleSpeakDe','studyExampleSpeakEn'].forEach(id=>$(id).addEventListener('click',e=>e.stopPropagation()));$('endReview').onclick=()=>{currentWord=null;studyQueue=[];studyIndex=0;$('studyCard').hidden=true;renderLearn();renderHome();};$('studySpeak').onclick=()=>speak(currentWord?.german,'de');$('studyTranslationSpeak').onclick=()=>speak(currentWord?.translation,'en');document.querySelectorAll('[data-rating]').forEach(b=>b.onclick=()=>rateWord(b.dataset.rating));$('addWordOpen').onclick=()=>openEditor();$('importCsvOpen').onclick=()=>$('importCsv').click();$('closeEditor').onclick=()=>$('wordEditor').hidden=true;$('wordEditor').onsubmit=saveEditor;$('personalWordList').onkeydown=e=>{if((e.key==='Enter'||e.key===' ')&&e.target.closest('[data-open-word]')&&!e.target.closest('button,a')){e.preventDefault();openWordDetail(words.find(x=>x.id===e.target.closest('[data-open-word]').dataset.openWord));}};$('personalWordList').onclick=async e=>{if(e.target.closest('a'))return;const ed=e.target.closest('[data-edit]'),del=e.target.closest('[data-delete]'),view=e.target.closest('[data-open-word]');if(ed){e.stopPropagation();openEditor(words.find(x=>x.id===ed.dataset.edit));}else if(del){e.stopPropagation();const target=words.find(x=>x.id===del.dataset.delete);if(!target)return;if(confirm(`Delete “${target.german}” permanently? Its review history will also be removed.`)){await remove('words',target.id);await removeMany('reviewLogs',logs.filter(x=>x.wordId===target.id).map(x=>x.id));words=await all('words');logs=await all('reviewLogs');renderAll();toast('Personal word deleted.');}}else if(view){openWordDetail(words.find(x=>x.id===view.dataset.openWord));}};$('methodSnapshot').onclick=e=>{const b=e.target.closest('[data-distribution-index]');if(b)openDistributionGroup(Number(b.dataset.distributionIndex));};$('distributionModalList').onclick=e=>{const b=e.target.closest('[data-open-word]');if(b){const w=words.find(x=>x.id===b.dataset.openWord);$('distributionModal').close();openWordDetail(w);}};$('wordDetailClose').onclick=()=>$('wordDetailModal').close();$('distributionClose').onclick=()=>$('distributionModal').close();$('wordSearch').oninput=()=>{libraryLimit=100;renderLibrary()};$('loadMoreWords').onclick=()=>{libraryLimit+=100;renderLibrary()};document.querySelectorAll('[data-exercise]').forEach(b=>b.onclick=()=>startExercise(b.dataset.exercise));$('closeExercise').onclick=()=>$('exercisePanel').hidden=true;$('exerciseChoices').onclick=e=>{const b=e.target.closest('[data-choice]');if(b)answerExercise(b.dataset.choice)};$('exerciseNext').onclick=nextExercise;$('exerciseAudio').onclick=()=>speak(exercise?.questions[exercise.index]?.speak);$('themeSelect').onchange=async()=>{settings.theme=$('themeSelect').value;await setSetting('theme',settings.theme);applyTheme()};$('dailyGoalSelect').onchange=async()=>{settings.dailyGoal=Number($('dailyGoalSelect').value);await setSetting('dailyGoal',settings.dailyGoal);renderHome()};$('newWordsPerDaySelect').onchange=async()=>{settings.newWordsPerDay=Number($('newWordsPerDaySelect').value);await setSetting('newWordsPerDay',settings.newWordsPerDay);renderHome();renderLearn();};$('algorithmSelect').onchange=async()=>{settings.algorithm=$('algorithmSelect').value;await setSetting('algorithm',settings.algorithm);renderAll();renderProgress();toast('Review method changed. Only the selected method is shown in Progress.');};$('speechRate').onchange=async()=>{settings.speechRate=Number($('speechRate').value);await setSetting('speechRate',settings.speechRate)};$('germanSpeechVoice').onchange=async()=>{settings.germanVoiceMode=$('germanSpeechVoice').value;await setSetting('germanVoiceMode',settings.germanVoiceMode);if(settings.germanVoiceMode!=='system'&&!voiceModelReady[settings.germanVoiceMode])setVoiceStatus('German voice selected. Download it to use it offline.');renderVoiceSettings();};$('englishSpeechVoice').onchange=async()=>{settings.englishVoiceMode=$('englishSpeechVoice').value;await setSetting('englishVoiceMode',settings.englishVoiceMode);if(settings.englishVoiceMode!=='system'&&!voiceModelReady[settings.englishVoiceMode])setVoiceStatus('English voice selected. Download it to use it offline.');renderVoiceSettings();};$('deleteVoiceModels').onclick=deleteDownloadedVoices;$('downloadVoiceModels').onclick=downloadSelectedVoices;
  $('exportJson').onclick=exportBackup;$('exportCsv').onclick=exportCsv;$('restoreJson').onchange=e=>{if(e.target.files[0])restoreBackup(e.target.files[0]).catch(err=>toast(err.message));e.target.value=''};$('importCsv').onchange=e=>{if(e.target.files[0])importCsv(e.target.files[0]).catch(err=>{$('dataStatus').textContent=err.message;toast('CSV import failed.')});e.target.value=''};$('importBatchList').onclick=e=>{const b=e.target.closest('[data-delete-import-batch]');if(b)deleteImportBatch(b.dataset.deleteImportBatch)};$('deletePersonalWords').onclick=async()=>{const personal=[...words];if(!personal.length)return toast('There are no vocabulary entries to delete.');if(!confirm(`Permanently delete all ${personal.length} vocabulary entries and their review history? Export a JSON backup first if you may need these words later.`))return;const ids=new Set(personal.map(w=>w.id));await removeMany('words',[...ids]);await removeMany('reviewLogs',logs.filter(x=>ids.has(x.wordId)).map(x=>x.id));words=await all('words');logs=await all('reviewLogs');renderAll();$('dataStatus').textContent=`Deleted ${personal.length} vocabulary entries.`;toast('Personal vocabulary deleted.');};$('resetProgress').onclick=async()=>{if(!confirm('Reset all review schedules and learning history while keeping every word?'))return;const fresh=words.map(w=>{const x={...w,scheduling:{leitner:{box:1,interval:0,dueDate:today(),reviewCount:0},sm2:{repetitions:0,easeFactor:2.5,interval:0,dueDate:today(),reviewCount:0}},box:1,repetitions:0,easeFactor:2.5,interval:0,dueDate:today()};delete x.lastReviewed;delete x.reviewCount;return x;});await putMany('words',fresh);await clear('reviewLogs');words=await all('words');logs=[];currentWord=null;studyQueue=[];studyIndex=0;$('studyCard').hidden=true;renderAll();toast('Learning progress reset. Your words are safe.');};}
 init();
