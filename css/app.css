@@ -309,3 +309,13 @@ body.reviewing-session .study-card-front .study-word-row { min-height:0; }
 
 body.reviewing-session .study-card-inner { position:relative; display:block; }
 body.reviewing-session .study-card-face { position:absolute; inset:0; width:100%; }
+
+
+
+/* Fix: hide the front-side speaker when the card is flipped */
+body.reviewing-session #studyCard.is-flipped .study-card-front .sound-button {
+  visibility: hidden !important;
+  opacity: 0 !important;
+  pointer-events: none !important;
+}
+
