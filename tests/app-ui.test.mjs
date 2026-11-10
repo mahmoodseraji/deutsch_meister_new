@@ -44,18 +44,17 @@ test('the redesigned pages remove redundant home shortcuts and library filters',
   assert.match(html, /id="progressDue"/);
 });
 
-test('V3.6.1 exposes neural voice diagnostics and safe model deletion controls', async () => {
+test('V3.7.0 exposes Phonon sample playback, voice selection and cache deletion', async () => {
   const html = await readFile(new URL('../index.html', import.meta.url), 'utf8');
   const app = await readFile(new URL('../js/app.js', import.meta.url), 'utf8');
-  const worker = await readFile(new URL('../js/voice-worker.js', import.meta.url), 'utf8');
-  assert.match(html, /id="voiceDiagnosticStatus"/);
-  assert.match(html, /id="voiceDiagnosticLog"/);
-  assert.match(html, /id="deleteVoiceModels"/);
+  const manager = await readFile(new URL('../js/voice-manager.js', import.meta.url), 'utf8');
+  for (const id of ['nele','anton','zoey','easton']) assert.match(html, new RegExp('voice-samples/' + id + '\\\\.ogg'));
   assert.match(html, /id="downloadVoiceModels"/);
-  assert.match(app, /voiceModelsDisabled/);
-  assert.match(app, /deleteNeuralVoice/);
-  assert.match(worker, /action === 'delete'/);
-  assert.match(worker, /reportStage\('Generating speech with ONNX'\)/);
+  assert.match(html, /id="deleteVoiceModels"/);
+  assert.match(app, /downloadSelectedVoices/);
+  assert.match(app, /deleteDownloadedVoices/);
+  assert.match(manager, /deleteAllNeuralVoices/);
+  assert.doesNotMatch(app + manager, /deleteNeuralVoice|voiceModelsDisabled/);
 });
 
 test('V3.6.2 keeps the home dashboard separate from a full-screen flip-card review', () => {
