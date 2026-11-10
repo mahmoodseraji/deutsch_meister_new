@@ -14,8 +14,10 @@ const CORE = [
   './vendor/phonon-tts/wav.js', './vendor/phonon-tts/threads.js',
   './vendor/phonon-tts/device.js', './vendor/phonon-tts/simd.js',
   './vendor/phonon-tts/wasm/phonon_tts.js',
+  './vendor/phonon-tts/wasm/phonon_tts_bg.wasm',
   './vendor/phonon-tts/wasm/phonon_tts_simd_bg.wasm',
   './vendor/phonon-tts/wasm-threads/phonon_tts.js',
+  './vendor/phonon-tts/wasm-threads/phonon_tts_bg.wasm',
   './vendor/phonon-tts/wasm-threads/phonon_tts_simd_bg.wasm',
   './vendor/phonon-tts/LICENSE-MIT', './vendor/phonon-tts/LICENSE-APACHE',
   './vendor/phonon-tts/THIRD_PARTY_LICENSES.md'
@@ -45,22 +47,11 @@ self.addEventListener('fetch', event => {
   const url = new URL(event.request.url);
   if (url.origin !== self.location.origin) return;
 
-  // Phonon fetches its model/voice files itself and stores their complete responses
-  // in phonon-tts-v1. The service worker serves local model files from the app shell
-  // cache so the first download works offline after the shell is installed.
-  if (PHONON_MODEL_FILES.some(path => new URL(path, self.registration.scope).href === url.href)) {
-    event.respondWith((async () => {
-      const cache = await caches.open(CACHE);
-      const cached = await cache.match(event.request);
-      if (cached) return cached;
-      try {
-        const response = await fetch(event.request);
-        if (response.ok) await cache.put(event.request, response.clone());
-        return response;
-      } catch {
-        return new Response('Phonon model asset is unavailable offline.', { status: 503 });
-      }
-    })());
+  // Let phonon-tts own model and embedding cache entries. If the service worker
+  // copied these large files into its shell cache too, the app's Delete voices
+  // action could not actually release that storage.
+  if (url.pathname.includes('/models/phonon/')) {
+    event.respondWith(fetch(event.request));
     return;
   }
 
