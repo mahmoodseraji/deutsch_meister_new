@@ -1,9 +1,18 @@
-# Deutsch Meister 3.6.7 — automated test report
+# Deutsch Meister 3.7.0 — validation status
 
-- JavaScript syntax checks: passed (`js/app.js`, `js/db.js`).
-- Automated Node test suite: **99 passed, 0 failed**.
-- HTML-to-JavaScript static ID reference check: no missing IDs.
-- IndexedDB schema remains version 2; no database deletion or schema migration is required.
-- Real-device/browser validation is still required, especially iPhone Safari card sizing, touch interactions, service-worker cache refresh, and backup restore with a real streak history.
+## Source migration
 
-The automated suite verifies scheduling helpers, interrupted-new-word queue behavior, atomic review writes, backup-start-date preservation logic, clickable progress groups, library detail markup hooks, and existing regression coverage.
+- Piper voice manager and worker removed from the active app.
+- Phonon 0.4.2 adapter and four voice choices added.
+- Voice audition samples, selected-only download controls, system fallback and Phonon cache deletion added.
+- Service worker updated to cache local runtime assets and audition recordings.
+- Existing IndexedDB, vocabulary, CSV/JSON, Leitner and SM-2 source modules were not intentionally modified.
+
+## Checks not yet run
+
+- The local `vendor/phonon-tts` directory must be generated with `npm install && npm run vendor:phonon`.
+- JavaScript syntax checks and `npm test` have not yet been run in this environment.
+- GitHub Actions result has not yet been confirmed.
+- Real model synthesis and physical iPhone 16 / iOS 26 playback have not been tested.
+
+Do not treat this as a verified release until the vendored runtime is present, automated checks pass, and manual browser/device tests are complete.
