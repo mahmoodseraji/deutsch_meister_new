@@ -8,7 +8,6 @@ test('pins the official browser runtime and includes a reproducible vendoring co
  assert.equal(packageJson.dependencies['phonon-tts'],'0.4.2');
  assert.equal(packageJson.scripts['vendor:phonon'],'node scripts/vendor-phonon.mjs');
  assert.ok(vendorScript.includes("join(root, 'vendor', 'phonon-tts')"));
- assert.ok(vendorScript.includes("join(root, 'vendor', 'phonon-tts')"));
 });
 test('keeps model weights shared and voice embeddings separate',()=>{
  assert.match(manager,/modelReady/);
