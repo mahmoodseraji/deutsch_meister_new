@@ -18,7 +18,6 @@ if (pkg.version !== '0.4.2') {
 await mkdir(join(root, 'vendor'), { recursive: true });
 await rm(destination, { recursive: true, force: true });
 await cp(join(root, 'node_modules', 'phonon-tts'), destination, {
-  recursive: true,
-  filter: source => !source.includes('/node_modules/') && !source.endsWith('.map')
+  recursive: true
 });
 console.log(`Vendored phonon-tts ${pkg.version} into vendor/phonon-tts.`);
